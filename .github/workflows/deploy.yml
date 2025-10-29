@@ -1,10 +1,10 @@
-name: Deploy Node App to AWS EC2
+name: Deploy Dockerized Node App to AWS EC2
 
 on:
   push:
     branches:
-      - dev
-  workflow_dispatch:
+      - main   # Runs on push to main branch
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
   deploy:
@@ -14,36 +14,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install dependencies
-        run: |
-          cd app
-          npm install
-
       - name: Copy project files to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_KEY }}
-          source: "app/*"
+          source: "."
           target: "/home/${{ secrets.EC2_USERNAME }}/app"
 
-      - name: SSH into EC2 and Deploy with Docker
+      - name: SSH into EC2 and deploy Docker container
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_KEY }}
           script: |
+            echo "🚀 Starting deployment..."
             sudo apt-get update -y
             if ! command -v docker &> /dev/null
             then
-              echo "Installing Docker..."
+              echo "🛠 Installing Docker..."
               sudo apt-get install -y docker.io
               sudo systemctl start docker
               sudo systemctl enable docker
@@ -51,12 +42,17 @@ jobs:
 
             cd ~/app
 
+            # Stop old container if it exists
             if [ "$(sudo docker ps -q -f name=nodeapp)" ]; then
+              echo "🛑 Stopping existing container..."
               sudo docker stop nodeapp
               sudo docker rm nodeapp
             fi
 
+            echo "🐳 Building new Docker image..."
             sudo docker build -t nodeapp .
+
+            echo "🚢 Running new container..."
             sudo docker run -d -p 3000:3000 --name nodeapp nodeapp
 
             echo "✅ Deployment complete! App running on port 3000."
