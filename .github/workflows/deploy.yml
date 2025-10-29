@@ -1,71 +1,62 @@
-name: Deploy Dockerized Node App to AWS EC2
+name: Deploy to EC2 via Docker
 
 on:
   push:
     branches:
-      - main  # Runs on push to main branch
-  workflow_dispatch:  # Allow manual trigger
+      - main  # deploy when main branch updates
+      - dev   #add your current branch
+  workflow_dispatch:  # allows manual trigger from Actions tab
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout source code
+        uses: actions/checkout@v3
 
-      # 🔍 Test SSH connectivity before copying files
-      - name: Test SSH connectivity
+      - name: Build Docker image
         run: |
-          echo "${{ secrets.EC2_KEY }}" > private.pem
-          chmod 600 private.pem
-          ssh -o StrictHostKeyChecking=no -i private.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} "echo ✅ SSH connected successfully!"
+          docker build -t myapp .
 
-      # 📦 Copy project files to EC2
-      - name: Copy project files to EC2
+      - name: Save Docker image as tar
+        run: docker save myapp > myapp.tar
+
+      - name: Copy Docker image to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_KEY }}
-          source: "."
-          target: "/home/${{ secrets.EC2_USERNAME }}/app"
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "myapp.tar"
+          target: "~/app/"
 
-      # 🚀 SSH into EC2 and deploy Docker container
-      - name: SSH into EC2 and deploy Docker container
-        uses: appleboy/ssh-action@v1.0.3
+
+      - name: SSH and deploy
+        uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_KEY }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          
+          port: 22
           script: |
-            echo "🚀 Starting deployment on EC2..."
+              # Add user to docker group (if not already added)
+              sudo usermod -aG docker $USER || true
 
-            # Update and install Docker if needed
-            sudo apt-get update -y
-            if ! command -v docker &> /dev/null; then
-              echo "🛠 Installing Docker..."
-              sudo apt-get install -y docker.io
-              sudo systemctl start docker
-              sudo systemctl enable docker
-            fi
+              # Install Docker if not present
+              if ! command -v docker &> /dev/null; then
+                echo "Installing Docker..."
+                sudo apt-get update -y
+                sudo apt-get install -y docker.io
+                sudo systemctl enable docker
+                sudo systemctl start docker
+              fi
 
-            # Navigate to project directory
-            cd /home/${{ secrets.EC2_USERNAME }}/app
-
-            echo "🧹 Cleaning old containers..."
-            if [ "$(sudo docker ps -q -f name=nodeapp)" ]; then
-              sudo docker stop nodeapp
-              sudo docker rm nodeapp
-            fi
-            if [ "$(sudo docker images -q nodeapp)" ]; then
-              sudo docker rmi -f nodeapp
-            fi
-
-            echo "🐳 Building new Docker image..."
-            sudo docker build -t nodeapp .
-
-            echo "🚢 Running new container..."
-            sudo docker run -d -p 3000:3000 --name nodeapp nodeapp
-
-            echo "✅ Deployment complete! Node app running on port 3000."
+              # Deploy container
+              mkdir -p ~/app
+              cd ~/app
+              sudo docker load < myapp.tar
+              sudo docker stop myapp || true
+              sudo docker rm myapp || true
+              sudo docker run -d -p 3000:3000 --name myapp myapp
